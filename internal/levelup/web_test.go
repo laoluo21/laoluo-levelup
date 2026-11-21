@@ -105,6 +105,12 @@ func TestWebRequiresSetupSessionAndCSRF(t *testing.T) {
 	if status != 200 || Int(Obj(r["config"])["bot_qq"]) != robot {
 		t.Fatal("authenticated status failed")
 	}
+	if _, ok := r["devices_total"]; ok {
+		t.Fatal("console status still returns device inventory")
+	}
+	if _, ok := r["devices_free"]; ok || count(w.api, "get_device_profile_list") != 0 {
+		t.Fatal("console status should not query available devices")
+	}
 	status, _ = w.request(t, "/api/config", w.e.Config, "", "")
 	if status != 403 {
 		t.Fatal("missing CSRF accepted")

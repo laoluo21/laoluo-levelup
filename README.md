@@ -8,7 +8,7 @@
 
 [下载插件安装包](https://github.com/laoluo21/laoluo-levelup/releases) · [友情链接：Mengka NT 官方仓库](https://github.com/Carlor-Official/Mengka-NT)
 
-**v0.3.5 新增同域管理入口。** 托管 Docker 安装可通过 Unix Socket 接入宿主机 Nginx。配置一次后，用现有 Mengka 域名打开 `/laoluo-levelup/`，无需新域名或映射 `18890`。 [接入步骤](管理页面访问说明.md#1-用现有-mengka-域名打开管理页) · [更新记录](CHANGELOG.md)
+**v0.3.6 简化管理控制台。** 后台入口默认填入当前页面的 HTTPS 域名。托管 Docker 安装可通过 Unix Socket 将控制台接入现有 Mengka 域名的 `/laoluo-levelup/` 路径。 [接入步骤](管理页面访问说明.md#1-用现有-mengka-域名打开管理页) · [更新记录](CHANGELOG.md)
 
 ## 功能
 
@@ -31,8 +31,10 @@
 
 1. 在 [GitHub Releases](https://github.com/laoluo21/laoluo-levelup/releases) 选择与你服务器架构一致的安装包。x86-64 用 `*-linux-amd64.zip`，ARM64 用 `*-linux-arm64.zip`。同一版本提供 `SHA256SUMS`。
 2. 在 Mengka 插件管理中导入 ZIP 并启动。打开插件运行日志，查看管理网页的监听地址和一次性初始化码。
-3. 用现有 Mengka HTTPS 域名的 `/laoluo-levelup/` 路径打开控制台。托管 Docker 安装可以通过插件 Socket 接入宿主机 Nginx，无需映射 `18890`。[管理页面访问说明](管理页面访问说明.md)包含安装包内的接入工具和配置步骤。
+3. 用现有 Mengka HTTPS 域名的 `/laoluo-levelup/` 路径打开控制台。托管 Docker 安装可以通过插件 Socket 接入宿主机 Nginx。[管理页面访问说明](管理页面访问说明.md)包含安装包内的接入工具和配置步骤。
 4. 在「机器人配置」里选择已在线的 NT Pad 机器人，确认 Pad 和 Linux 协议，然后保存。用户可以添加机器人为好友，在 QQ 私聊发送 `等级菜单`。
+
+「执行设置」里的 Mengka 后台入口在 HTTPS 访问时会自动填入当前域名，并随配置一起保存。已有自定义地址会保留。
 
 升级时保留框架分配的插件持久目录，其中包含配置、网页认证状态和设备归属。建议升级前先备份。
 

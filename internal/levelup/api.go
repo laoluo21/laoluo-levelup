@@ -16,7 +16,7 @@ import (
 
 type Object = map[string]any
 
-const Version = "0.3.5"
+const Version = "0.3.6"
 
 var Actions = []string{"get_account_management_context", "get_device_profile_list", "create_device_profile", "send_friend_msg", "upload_friend_image", "file_transfer", "add_account", "update_account", "offline_account", "login_account", "query_login_qr", "scan_qr", "auth_qr", "get_security_verify_methods", "get_security_verify_qr", "query_security_verify_qr", "get_sms", "check_sms", "submit_identity_phone", "confirm_identity_sms", "level_task_management", "execute_level_tasks"}
 var allowed = func() map[string]bool {
@@ -226,5 +226,4 @@ func Call(api API, action string, params Object) (any, error) {
 	defer cancel()
 	return api.Call(ctx, action, params)
 }
-func number(s string) int64    { v, _ := strconv.ParseInt(s, 10, 64); return v }
 func key(qq, pid int64) string { return fmt.Sprintf("%d:%d", qq, pid) }

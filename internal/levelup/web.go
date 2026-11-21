@@ -427,7 +427,7 @@ func (a *AdminWeb) status() Object {
 			}
 		}
 	}
-	meta := Object{"bots": bots, "protocols": protocols, "account_count": len(d.Bots), "bot_state": "unconfigured", "devices_total": nil, "devices_free": nil}
+	meta := Object{"bots": bots, "protocols": protocols, "account_count": len(d.Bots), "bot_state": "unconfigured"}
 	if c.BotQQ != 0 {
 		b, err := findConfiguredBot(d, c.BotQQ, "pad", c.BotProtocolID)
 		state := "missing"
@@ -438,26 +438,6 @@ func (a *AdminWeb) status() Object {
 			}
 		}
 		meta["bot_state"] = state
-	}
-	profiles, err := Call(a.Engine.API, "get_device_profile_list", Object{})
-	if err == nil {
-		if list := Arr(profiles); list != nil {
-			used := map[int64]bool{}
-			for _, b := range d.Bots {
-				used[b.Device] = true
-			}
-			for id := range a.Engine.Store.Snapshot().Profiles {
-				used[number(id)] = true
-			}
-			free := 0
-			for _, p := range list {
-				if !used[Int(Obj(p)["id"])] {
-					free++
-				}
-			}
-			meta["devices_total"] = len(list)
-			meta["devices_free"] = free
-		}
 	}
 	a.cache = meta
 	a.cacheAt = time.Now()
