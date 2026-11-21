@@ -1,0 +1,63 @@
+name: Build and publish release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - name: Check release version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+
+          tag = os.environ['TAG']
+          version = re.search(r'^const Version = "([^"]+)"$', Path('internal/levelup/api.go').read_text(), re.M)[1]
+          manifest_version = json.loads(Path('mengka-plugin.json').read_text())['version']
+          if tag != 'v' + version or manifest_version != version:
+              raise SystemExit(f'Tag {tag}, plugin version {version}, and manifest version {manifest_version} must match.')
+          if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?', tag):
+              raise SystemExit(f'Unsupported release tag: {tag}')
+          PY
+      - name: Test and build packages
+        run: |
+          go test -race ./...
+          go vet ./...
+          python3 scripts/package.py
+          (cd dist && sha256sum --check SHA256SUMS)
+          python3 scripts/ipc_smoke.py .build/linux-amd64/laoluo-levelup mengka-plugin.json
+      - name: Publish packages to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          release_flags=()
+          if [[ "$TAG" == v0.3.2 || "$TAG" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "$TAG" --verify-tag --title "laoluo-levelup $TAG" --generate-notes \
+            "${release_flags[@]}" \
+            "dist/laoluo-levelup-$TAG-linux-amd64.zip" \
+            "dist/laoluo-levelup-$TAG-linux-arm64.zip" \
+            "dist/laoluo-levelup-$TAG-source.zip" \
+            dist/SHA256SUMS

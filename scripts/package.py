@@ -15,6 +15,7 @@ for arch in ['amd64','arm64']:
  subprocess.run(['go','build','-trimpath','-ldflags=-s -w','-o',str(out/'laoluo-levelup'),'./cmd/laoluo-levelup'],cwd=root,env=env,check=True)
  archive=root/'dist'/f'laoluo-levelup-v{version}-linux-{arch}.zip'
  contents={'mengka-plugin.json':(root/'mengka-plugin.json').read_bytes(),'config.json':(root/'config.json').read_bytes(),'README.md':(root/'README.md').read_bytes(),'管理页面访问说明.md':(root/'管理页面访问说明.md').read_bytes(),'LICENSE':(root/'LICENSE').read_bytes(),'laoluo-levelup':(out/'laoluo-levelup').read_bytes()}
+ contents['assets/banner.webp']=(root/'assets/banner.webp').read_bytes()
  for p in (root/'LICENSES').glob('*'):contents['LICENSES/'+p.name]=p.read_bytes()
  with zipfile.ZipFile(archive,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=9) as z:
   for name,raw in contents.items():
