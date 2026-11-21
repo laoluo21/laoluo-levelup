@@ -130,7 +130,11 @@ func (a *AdminWeb) body(w http.ResponseWriter, r *http.Request, v any) bool {
 			return false
 		}
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16384))
+	limit := int64(16 << 10)
+	if r.URL.Path == "/api/config" {
+		limit = 512 << 10
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(v); err != nil {
 		a.fail(w, 400, "参数格式不正确")
@@ -358,6 +362,17 @@ func (a *AdminWeb) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.write(w, 200, a.status())
+	case "/api/reply-templates":
+		if r.Method != "GET" {
+			a.fail(w, 405, "不支持此请求")
+			return
+		}
+		if _, ok := a.require(w, r, false); !ok {
+			return
+		}
+		a.write(w, 200, Object{"templates": replyCatalog})
+	case "/api/project-catalog":
+		a.projectCatalog(w, r)
 	case "/api/config":
 		if _, ok := a.require(w, r, true); !ok {
 			return
@@ -385,6 +400,47 @@ func (a *AdminWeb) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, 404, "页面不存在")
 	}
 }
+
+func (a *AdminWeb) projectCatalog(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.require(w, r, true); !ok {
+		return
+	}
+	var input struct {
+		QQ  int64  `json:"qq"`
+		PID *int64 `json:"protocol_id"`
+	}
+	if !a.body(w, r, &input) {
+		return
+	}
+	if input.QQ < 10000 || input.PID == nil || *input.PID < 0 {
+		a.fail(w, 400, "请选择一个在线的 NT Pad 账号")
+		return
+	}
+	a.mu.Lock()
+	ready := a.ready
+	a.mu.Unlock()
+	if !ready {
+		a.fail(w, 409, "框架尚未连接，可先手动添加项目映射")
+		return
+	}
+	d, err := a.Engine.dir()
+	if err != nil {
+		a.fail(w, 502, "暂时无法查询框架账号，可先手动添加项目映射")
+		return
+	}
+	b, err := findConfiguredBot(d, input.QQ, "pad", input.PID)
+	if err != nil || b == nil || b.Status != 1 || b.NT != 1 {
+		a.fail(w, 400, "请选择一个在线的 NT Pad 账号")
+		return
+	}
+	_, names, _, err := a.Engine.settings(b.QQ, b.PID)
+	if err != nil {
+		a.fail(w, 502, Friendly(err)+" 可手动添加项目映射。")
+		return
+	}
+	a.write(w, 200, Object{"names": names})
+}
+
 func (a *AdminWeb) status() Object {
 	a.mu.Lock()
 	ready, note := a.ready, a.note

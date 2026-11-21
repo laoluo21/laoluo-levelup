@@ -12,15 +12,17 @@ import (
 )
 
 type Config struct {
-	BotQQ           int64  `json:"bot_qq"`
-	BotProtocolID   *int64 `json:"bot_protocol_id"`
-	PadProtocolID   *int64 `json:"pad_protocol_id"`
-	LinuxProtocolID *int64 `json:"linux_protocol_id"`
-	AdminURL        string `json:"admin_url"`
-	DataDir         string `json:"data_dir"`
-	SessionMinutes  int    `json:"session_minutes"`
-	QuickLogin      bool   `json:"quick_login"`
-	WebListen       string `json:"web_listen"`
+	BotQQ           int64             `json:"bot_qq"`
+	BotProtocolID   *int64            `json:"bot_protocol_id"`
+	PadProtocolID   *int64            `json:"pad_protocol_id"`
+	LinuxProtocolID *int64            `json:"linux_protocol_id"`
+	AdminURL        string            `json:"admin_url"`
+	DataDir         string            `json:"data_dir"`
+	SessionMinutes  int               `json:"session_minutes"`
+	QuickLogin      bool              `json:"quick_login"`
+	WebListen       string            `json:"web_listen"`
+	TaskAliases     map[string]string `json:"task_aliases,omitempty"`
+	ReplyTemplates  map[string]string `json:"reply_templates,omitempty"`
 }
 type Bot struct {
 	QQ, PID, Device, Status, NT, Level int64
@@ -210,8 +212,6 @@ func (e *Engine) send(qq int64, text string) error {
 	return nil
 }
 
-const Menu = "等级菜单\n-------\n开始登录 | 立即补挂\n项目开关 | 电脑登录\n继续验证 | 取消操作\n\n仅能操作您当前发消息的QQ；请勿发送其他号码的密码。"
-
 func eventText(event Object) (string, bool) {
 	var b strings.Builder
 	for _, v := range Arr(event["message"]) {
@@ -225,11 +225,7 @@ func eventText(event Object) (string, bool) {
 	return text, len(text) > 0 && len(text) <= 4096
 }
 func known(s string) bool {
-	switch s {
-	case "身份手机号", "等级菜单", "开始登录", "立即补挂", "项目开关", "电脑登录", "继续验证", "取消操作", "接收短信", "发送短信", "安全扫码", "已发送", "查询二维码":
-		return true
-	}
-	return strings.HasSuffix(s, " 开启") || strings.HasSuffix(s, " 关闭")
+	return fixedCommands[s] || strings.HasSuffix(s, " 开启") || strings.HasSuffix(s, " 关闭")
 }
 func (e *Engine) Handle(event Object) {
 	e.configGate.RLock()
@@ -289,13 +285,13 @@ func (e *Engine) Handle(event Object) {
 		return
 	}
 	if err = e.handle(sender, command, text); err != nil {
-		_ = e.send(sender, Friendly(err))
+		_ = e.replyError(sender, err)
 	}
 }
 func (e *Engine) handle(qq int64, command, raw string) error {
 	switch command {
 	case "等级菜单":
-		return e.send(qq, Menu)
+		return e.reply(qq, "menu")
 	case "取消操作":
 		return e.cancel(qq)
 	case "开始登录":
@@ -311,10 +307,10 @@ func (e *Engine) handle(qq int64, command, raw string) error {
 	case "身份手机号":
 		f := e.flow(qq)
 		if f == nil || f.Kind != "pad" || f.Stage != "identity_backend" {
-			return e.send(qq, "请先在后台完成身份验证页面，并确认当前要求核验手机号。")
+			return e.reply(qq, "identity_unavailable")
 		}
 		f.Stage = "identity_phone"
-		return e.send(qq, "请发送“区号 手机号”，例如：86 13800138000。")
+		return e.reply(qq, "identity_number")
 	case "接收短信":
 		return e.startSMS(qq, 4)
 	case "发送短信":
@@ -326,7 +322,7 @@ func (e *Engine) handle(qq int64, command, raw string) error {
 	}
 	if f := e.flow(qq); f != nil && f.Stage == "password" {
 		if len(raw) == 0 || len(raw) > 256 {
-			return e.send(qq, "密码长度不正确，请重新发送，或发“取消操作”。")
+			return e.reply(qq, "password_length")
 		}
 		return e.password(qq, raw)
 	}
@@ -341,18 +337,18 @@ func (e *Engine) handle(qq int64, command, raw string) error {
 	switch f.Stage {
 	case "password":
 		if len(raw) == 0 || len(raw) > 256 {
-			return e.send(qq, "密码长度不正确，请重新发送，或发“取消操作”。")
+			return e.reply(qq, "password_length")
 		}
 		return e.password(qq, raw)
 	case "sms_code":
 		if len(command) < 4 || len(command) > 12 || strings.Trim(command, "0123456789") != "" {
-			return e.send(qq, "请发送短信中的数字验证码，或发“取消操作”。")
+			return e.reply(qq, "sms_code_format")
 		}
 		return e.checkSMS(qq, command)
 	case "identity_phone":
 		parts := strings.Fields(command)
 		if len(parts) != 2 || len(parts[1]) < 5 || len(parts[1]) > 20 || strings.Trim(parts[0]+parts[1], "0123456789") != "" {
-			return e.send(qq, "请发送“区号 手机号”，例如：86 13800138000。")
+			return e.reply(qq, "identity_number")
 		}
 		p := selector(qq, f.PID)
 		p["area_code"] = parts[0]
@@ -366,7 +362,7 @@ func (e *Engine) handle(qq int64, command, raw string) error {
 		f.Stage = "identity_sent"
 		return e.smsInstructions(qq, Obj(v))
 	default:
-		return e.send(qq, "验证尚未完成。请按上条提示操作，再发送“继续验证”；也可发“取消操作”。")
+		return e.reply(qq, "verify_pending")
 	}
 }
 func (e *Engine) requirePad(qq int64) (*Bot, error) {
@@ -379,7 +375,7 @@ func (e *Engine) requirePad(qq int64) (*Bot, error) {
 		return nil, err
 	}
 	if b == nil || b.Status != 1 {
-		_ = e.send(qq, "请先发送“开始登录”，完成Pad账号登录。")
+		_ = e.reply(qq, "pad_required")
 		return nil, errors.New("LOGIN_REQUIRED")
 	}
 	if b.NT != 1 {
@@ -632,19 +628,22 @@ func (e *Engine) showProjects(qq int64) error {
 	if err != nil {
 		return err
 	}
-	var out strings.Builder
-	out.WriteString("项目开关\n-------\n")
-	for _, s := range supported {
-		state := "关闭❌"
-		if includes(selected, s) {
-			state = "开启✅"
-		}
-		fmt.Fprintf(&out, "%s-%s\n", s, state)
+	if len(supported) == 0 {
+		return e.reply(qq, "project_empty")
 	}
-	out.WriteString("------\n发送：项目名称 开启\n或：项目名称 关闭\n例如：电脑QQ在线 开启")
-	return e.send(qq, out.String())
+	rows := make([]string, 0, len(supported))
+	example := e.taskLabel(supported[0], supported)
+	for _, name := range supported {
+		label := e.taskLabel(name, supported)
+		status := "project_disabled"
+		if includes(selected, name) {
+			status = "project_enabled"
+		}
+		rows = append(rows, e.replyText("project_row", "项目名称", label, "项目状态", e.replyText(status)))
+	}
+	return e.reply(qq, "project_list", "项目列表", strings.Join(rows, "\n"), "项目示例", example)
 }
-func (e *Engine) toggle(qq int64, title string, on bool) error {
+func (e *Engine) toggle(qq int64, label string, on bool) error {
 	b, err := e.requirePad(qq)
 	if err != nil {
 		return err
@@ -656,8 +655,9 @@ func (e *Engine) toggle(qq int64, title string, on bool) error {
 	if err != nil {
 		return err
 	}
-	if !includes(supported, title) {
-		return e.send(qq, "项目名称不匹配，请发送“项目开关”复制完整名称。")
+	title := e.taskName(label, supported)
+	if title == "" {
+		return e.reply(qq, "project_unknown")
 	}
 	next := []string{}
 	for _, v := range selected {
@@ -675,7 +675,7 @@ func (e *Engine) toggle(qq int64, title string, on bool) error {
 	if on {
 		state = "开启"
 	}
-	return e.send(qq, title+" 已"+state)
+	return e.reply(qq, "project_toggle", "项目名称", e.taskLabel(title, supported), "项目状态", state)
 }
 func collectTasks(v any, out map[string][]Object) {
 	switch value := v.(type) {
@@ -733,7 +733,7 @@ func (e *Engine) repair(qq int64) error {
 		return err
 	}
 	if len(selected) == 0 {
-		return e.send(qq, "没有已开启项目，请先发送“项目开关”。")
+		return e.reply(qq, "repair_none_selected")
 	}
 	p := selector(qq, b.PID)
 	p["operation"] = "panel"
@@ -768,16 +768,16 @@ func (e *Engine) repair(qq int64) error {
 	if len(batch) > 100 {
 		return errors.New("TASK_BATCH_LIMIT")
 	}
+	hint := ""
+	if pc {
+		hint = e.replyText("repair_pc_hint")
+	}
 	if len(batch) == 0 {
-		message := "当前没有可提交的未完成项目。"
-		if pc {
-			message += "电脑上线请发送“电脑登录”。"
-		}
-		return e.send(qq, message)
+		return e.reply(qq, "repair_empty", "电脑上线提示", hint)
 	}
 	now := time.Now().Unix()
 	if now-e.Store.Snapshot().LastBatch[strconv.FormatInt(qq, 10)] < 30 {
-		return e.send(qq, "刚提交过补挂，请至少30秒后再查询、补挂，避免重复请求。")
+		return e.reply(qq, "repair_cooldown")
 	}
 	if err = e.Store.Update(func(s *State) error { s.LastBatch[strconv.FormatInt(qq, 10)] = now; return nil }); err != nil {
 		return err
@@ -787,11 +787,15 @@ func (e *Engine) repair(qq int64) error {
 	if err = e.API.Submit(ctx, "execute_level_tasks", Object{"self_id": qq, "protocol_id": b.PID, "tasks": batch}); err != nil {
 		return err
 	}
-	message := fmt.Sprintf("已提交%d项补挂：\n%s\n提交不代表任务已完成，下次补挂会重新查询实际状态。", len(batch), strings.Join(batch, "\n"))
-	if pc {
-		message += "\n电脑上线请发送“电脑登录”。"
+	labels := make([]string, 0, len(batch))
+	for _, name := range batch {
+		labels = append(labels, e.taskLabel(name, supported))
 	}
-	return e.send(qq, message)
+	if hint != "" {
+		hint = "\n" + hint
+	}
+	return e.reply(qq, "repair_submitted", "提交数量", strconv.Itoa(len(batch)),
+		"补挂项目", strings.Join(labels, "\n"), "电脑上线提示", hint)
 }
 
 // Expire ephemeral verification material even when a user never sends another message.

@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -29,23 +28,23 @@ func (e *Engine) startPad(qq int64) error {
 		if err = e.initialize(qq, b.PID); err != nil {
 			return err
 		}
-		return e.send(qq, "Pad账号已经在线。可发送“立即补挂”或“项目开关”。")
+		return e.reply(qq, "pad_online")
 	}
 	if b != nil && b.Status == 2 {
-		return e.send(qq, "账号正在验证，请到Mengka后台完成当前验证，再发“继续验证”。")
+		return e.reply(qq, "pad_pending")
 	}
 	if f := e.flow(qq); f != nil {
-		return e.send(qq, "已有操作尚未完成，请按上条提示继续，或发送“取消操作”。")
+		return e.reply(qq, "session_busy")
 	}
 	pid, err := protocol(d, "pad", e.Config.PadProtocolID)
 	if err != nil {
 		return err
 	}
 	e.setFlow(qq, e.newSession("pad", "password", pid))
-	if err = e.send(qq, "开始登录流程"); err != nil {
+	if err = e.reply(qq, "pad_start"); err != nil {
 		return err
 	}
-	return e.send(qq, "请发送您的QQ密码给我。下一条非菜单指令将原样作为密码；只用于登录您当前私聊的QQ。也可发送“取消操作”。")
+	return e.reply(qq, "pad_password")
 }
 func (e *Engine) password(qq int64, password string) error {
 	f := e.flow(qq)
@@ -62,7 +61,7 @@ func (e *Engine) password(qq int64, password string) error {
 	}
 	if existing != nil && existing.Status != 0 {
 		f.Stage = "backend"
-		return e.send(qq, "账号状态已变化，请到后台核对，再发送“继续验证”。")
+		return e.reply(qq, "login_state_changed")
 	}
 	// Consume the password step BEFORE any uncertain mutation. Do not replay a password after timeout.
 	f.Stage = "backend"
@@ -109,7 +108,7 @@ func (e *Engine) finish(qq int64, f *Session) error {
 	if f.Kind == "pad" {
 		if err := e.initialize(qq, f.PID); err != nil {
 			e.setFlow(qq, nil)
-			_ = e.send(qq, "Pad已确认在线，但任务设置未完成；请稍后发送“项目开关”重试。")
+			_ = e.reply(qq, "pad_settings_failed")
 			return err
 		}
 	}
@@ -118,7 +117,7 @@ func (e *Engine) finish(qq int64, f *Session) error {
 	if f.Kind == "linux" {
 		name = "Linux电脑"
 	}
-	return e.send(qq, name+"已确认登录成功。")
+	return e.reply(qq, "login_success", "账号类型", name)
 }
 func (e *Engine) acceptLogin(qq int64, r Object) error {
 	f := e.flow(qq)
@@ -136,10 +135,10 @@ func (e *Engine) acceptLogin(qq int64, r Object) error {
 	switch next {
 	case "slider":
 		f.Stage = "backend"
-		return e.send(qq, "本次登录需要滑块验证。请到Mengka后台完成该QQ的当前验证，然后回这里发送“继续验证”。"+e.backendHint())
+		return e.reply(qq, "slider_required", "后台地址", e.backendHint())
 	case "identity":
 		f.Stage = "identity_backend"
-		return e.send(qq, "本次登录需要身份验证。请先到Mengka后台完成身份验证页面；可在后台完成整个流程后发送“继续验证”。若后台已完成身份滑块并要求核验手机，可发送“身份手机号”，随后用“区号 手机号”继续。"+e.backendHint())
+		return e.reply(qq, "identity_required", "后台地址", e.backendHint())
 	case "security":
 		methods := Obj(r["security_verify"])
 		if methods == nil {
@@ -165,30 +164,30 @@ func (e *Engine) acceptLogin(qq int64, r Object) error {
 		}
 		if len(choices) == 0 {
 			f.Stage = "backend"
-			return e.send(qq, "请到Mengka后台完成当前安全验证，再发送“继续验证”。"+e.backendHint())
+			return e.reply(qq, "security_backend", "后台地址", e.backendHint())
 		}
-		return e.send(qq, "请选择安全验证方式，发送以下任一指令：\n"+strings.Join(choices, " | "))
+		return e.reply(qq, "security_choices", "可用验证指令", strings.Join(choices, " | "))
 	case "qr":
 		if f.QRURL != "" {
-			return e.send(qq, "二维码尚未确认，请用手机QQ确认后再发“继续验证”。")
+			return e.reply(qq, "qr_pending")
 		}
 		f.Stage = "linux_qr"
 		u := Str(r["url"])
 		if u == "" {
 			u = Str(r["qr_url"])
 		}
-		return e.sendQR(qq, u, "请用手机QQ扫描二维码并确认，再发送“继续验证”。")
+		return e.sendQR(qq, u, e.replyText("qr_scan"))
 	case "failed":
 		f.Stage = "backend"
-		return e.send(qq, "本次登录未成功。请核对QQ密码或查看框架账号日志；先发“取消操作”，再重新开始。")
+		return e.reply(qq, "login_failed")
 	default:
 		// Old numeric codes are observations, never proof of login.
 		if Int(r["code"]) == 140022008 || Str(r["slider_url"]) != "" {
 			f.Stage = "backend"
-			return e.send(qq, "请到Mengka后台完成滑块，再发送“继续验证”。"+e.backendHint())
+			return e.reply(qq, "slider_backend", "后台地址", e.backendHint())
 		}
 		f.Stage = "backend"
-		return e.send(qq, "登录结果尚未确认，请到后台查看当前状态，再发送“继续验证”。"+e.backendHint())
+		return e.reply(qq, "login_unconfirmed", "后台地址", e.backendHint())
 	}
 }
 func (e *Engine) continueLogin(qq int64) error {
@@ -206,17 +205,17 @@ func (e *Engine) continueLogin(qq int64) error {
 		if err != nil {
 			return err
 		}
-		out := "当前没有插件验证会话。"
+		status := []string{e.replyText("continue_no_active")}
 		if pad != nil && pad.Status == 1 {
 			if err = e.initialize(qq, pad.PID); err != nil {
 				return err
 			}
-			out += "\nPad已在线。"
+			status = append(status, e.replyText("continue_pad_online"))
 		}
 		if linux != nil && linux.Status == 1 {
-			out += "\nLinux电脑已在线。"
+			status = append(status, e.replyText("continue_linux_online"))
 		}
-		return e.send(qq, out+"\n可发送“等级菜单”重新选择。")
+		return e.reply(qq, "continue_no_session", "账号状态", strings.Join(status, "\n"))
 	}
 	online, err := e.online(qq, f)
 	if err != nil {
@@ -234,7 +233,7 @@ func (e *Engine) continueLogin(qq int64) error {
 		switch Str(r["state"]) {
 		case "code_expired", "canceled", "invalid":
 			f.Stage = "backend"
-			return e.send(qq, "二维码已失效，请发送“取消操作”后重新发“电脑登录”。")
+			return e.reply(qq, "qr_expired")
 		}
 		return e.acceptLogin(qq, r)
 	}
@@ -247,16 +246,16 @@ func (e *Engine) continueLogin(qq int64) error {
 		}
 		r := Obj(v)
 		if Str(r["status"]) == "waiting" || Str(r["status"]) == "scanned" {
-			return e.send(qq, "二维码尚未确认，请用手机QQ确认后再发“继续验证”。")
+			return e.reply(qq, "qr_pending")
 		}
 		return e.acceptLogin(qq, r)
 	}
-	return e.send(qq, "账号尚未确认在线，请完成当前短信、二维码或后台验证后再发“继续验证”。"+e.backendHint())
+	return e.reply(qq, "continue_pending", "后台地址", e.backendHint())
 }
 func (e *Engine) cancel(qq int64) error {
 	f := e.flow(qq)
 	if f == nil {
-		return e.send(qq, "当前没有待取消的插件操作。")
+		return e.reply(qq, "cancel_empty")
 	}
 	if f.Stage != "password" {
 		d, err := e.dir()
@@ -269,7 +268,7 @@ func (e *Engine) cancel(qq int64) error {
 		}
 		if b != nil && b.PID == f.PID && b.Status == 1 {
 			e.setFlow(qq, nil)
-			return e.send(qq, "账号已经在线，已结束对话操作，保留在线状态。")
+			return e.reply(qq, "cancel_online")
 		}
 		if b != nil && b.PID == f.PID && b.Status == 2 {
 			if _, err = Call(e.API, "offline_account", selector(qq, f.PID)); err != nil {
@@ -278,11 +277,11 @@ func (e *Engine) cancel(qq int64) error {
 		}
 	}
 	e.setFlow(qq, nil)
-	return e.send(qq, "已取消当前对话操作。")
+	return e.reply(qq, "cancel_done")
 }
 func (e *Engine) startLinux(qq int64) error {
 	if e.flow(qq) != nil {
-		return e.send(qq, "已有操作尚未完成，请先完成或发送“取消操作”。")
+		return e.reply(qq, "linux_session_busy")
 	}
 	d, err := e.dir()
 	if err != nil {
@@ -293,10 +292,10 @@ func (e *Engine) startLinux(qq int64) error {
 		return err
 	}
 	if old != nil && old.Status == 1 {
-		return e.send(qq, "Linux电脑已经在线。")
+		return e.reply(qq, "linux_online")
 	}
 	if old != nil && old.Status == 2 {
-		return e.send(qq, "电脑账号正在验证，请先到后台完成或取消当前验证。")
+		return e.reply(qq, "linux_pending")
 	}
 	b, err := e.ensureAccount(qq, "linux", "")
 	if err != nil {
@@ -357,7 +356,7 @@ func (e *Engine) startLinux(qq int64) error {
 		}
 	}
 	f.QRURL = qrURL
-	return e.sendQR(qq, qrURL, "免扫未确认成功，请用手机QQ扫描当前二维码并确认，再发送“继续验证”。")
+	return e.sendQR(qq, qrURL, e.replyText("linux_qr_fallback"))
 }
 func (e *Engine) sendQR(qq int64, raw, prompt string) error {
 	u, err := url.Parse(raw)
@@ -421,7 +420,7 @@ func (e *Engine) sendQR(qq int64, raw, prompt string) error {
 func (e *Engine) startSMS(qq, kind int64) error {
 	f := e.flow(qq)
 	if f == nil || f.Stage != "security" {
-		return e.send(qq, "当前没有可选择的短信验证步骤，请按当前验证提示操作。")
+		return e.reply(qq, "sms_unavailable")
 	}
 	m := Obj(f.Methods["methods"])
 	allowed := false
@@ -431,7 +430,7 @@ func (e *Engine) startSMS(qq, kind int64) error {
 		}
 	}
 	if !allowed {
-		return e.send(qq, "当前会话不支持这项短信验证方式。")
+		return e.reply(qq, "sms_method_unsupported")
 	}
 	sign := Str(m["sign"])
 	if sign == "" {
@@ -446,7 +445,7 @@ func (e *Engine) startSMS(qq, kind int64) error {
 	}
 	r := Obj(v)
 	if Obj(r["result"])["state"] != nil {
-		return e.send(qq, "框架未确认短信步骤可继续，请在后台核对当前验证状态。")
+		return e.reply(qq, "sms_unconfirmed")
 	}
 	f.Sign = Str(r["sign"])
 	if f.Sign == "" {
@@ -455,7 +454,7 @@ func (e *Engine) startSMS(qq, kind int64) error {
 	f.VerifyType = kind
 	if kind == 4 {
 		f.Stage = "sms_code"
-		return e.send(qq, "请发送您收到的短信验证码。")
+		return e.reply(qq, "sms_code_request")
 	}
 	f.Stage = "sms_sent"
 	return e.smsInstructions(qq, r)
@@ -463,9 +462,9 @@ func (e *Engine) startSMS(qq, kind int64) error {
 func (e *Engine) smsInstructions(qq int64, r Object) error {
 	text, to := Str(r["sms"]), Str(r["send_to"])
 	if text == "" || to == "" {
-		return e.send(qq, "请在Mengka后台查看需要发送的短信内容及接收号码，发送后回这里发“已发送”。"+e.backendHint())
+		return e.reply(qq, "sms_backend", "后台地址", e.backendHint())
 	}
-	return e.send(qq, fmt.Sprintf("请使用绑定的密保手机，将以下内容发送到 %s：\n%s\n发送后请回复：已发送", to, text))
+	return e.reply(qq, "sms_instructions", "短信接收号码", to, "短信内容", text)
 }
 func (e *Engine) checkSMS(qq int64, code string) error {
 	f := e.flow(qq)
@@ -484,7 +483,7 @@ func (e *Engine) checkSMS(qq int64, code string) error {
 	}
 	r := Obj(v)
 	if Obj(r["result"])["state"] != nil {
-		return e.send(qq, "短信验证尚未通过，请核对后重试，或到后台完成。")
+		return e.reply(qq, "sms_failed")
 	}
 	return e.acceptLogin(qq, r)
 }
@@ -497,7 +496,7 @@ func (e *Engine) checkSent(qq int64) error {
 		return e.checkSMS(qq, "")
 	}
 	if f.Stage != "identity_sent" {
-		return e.send(qq, "当前步骤不是发送短信确认，请按上条提示操作。")
+		return e.reply(qq, "sms_wrong_stage")
 	}
 	p := selector(qq, f.PID)
 	p["mobile"] = f.Mobile
@@ -520,7 +519,7 @@ func (e *Engine) securityQR(qq int64) error {
 		}
 	}
 	if !allowed {
-		return e.send(qq, "当前会话不支持安全扫码。")
+		return e.reply(qq, "security_qr_unsupported")
 	}
 	v, err := Call(e.API, "get_security_verify_qr", selector(qq, f.PID))
 	if err != nil {
@@ -532,5 +531,5 @@ func (e *Engine) securityQR(qq int64) error {
 		return errors.New("QR_TOKEN_MISSING")
 	}
 	f.Stage = "security_qr"
-	return e.sendQR(qq, Str(r["qr_url"]), "请用手机QQ扫描安全验证二维码并确认，再发送“继续验证”。")
+	return e.sendQR(qq, Str(r["qr_url"]), e.replyText("security_qr_scan"))
 }

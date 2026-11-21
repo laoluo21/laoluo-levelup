@@ -314,3 +314,94 @@ func TestWebPreview(t *testing.T) {
 	t.Log("isolated preview ready; access file /tmp/laoluo-ui-preview-access.json")
 	select {}
 }
+
+func TestWebTemplateCatalogUsesOfficialStatusAndRequiresSession(t *testing.T) {
+	w := webTest(t)
+	input := Object{"qq": robot, "protocol_id": 1}
+	for _, path := range []string{"/api/reply-templates", "/api/project-catalog"} {
+		var data any
+		if path == "/api/project-catalog" {
+			data = input
+		}
+		if status, _ := w.request(t, path, data, "", ""); status != 401 {
+			t.Fatalf("unauthenticated %s returned %d", path, status)
+		}
+	}
+	w.setup(t)
+	if status, r := w.request(t, "/api/reply-templates", nil, "", ""); status != 200 ||
+		len(Arr(r["templates"])) != len(replyCatalog) {
+		t.Fatal("unexpected reply catalog", status)
+	}
+	if status, _ := w.request(t, "/api/project-catalog", input, "", ""); status != 403 {
+		t.Fatal("project catalog accepted missing CSRF", status)
+	}
+	w.api.accounts = append(w.api.accounts, account(user, 1, 2, 0, "pad"), account(other, 0, 3, 1, "phone"))
+	for _, invalid := range []Object{{"qq": robot}, {"qq": user, "protocol_id": 1}, {"qq": other, "protocol_id": 0}} {
+		if status, _ := w.request(t, "/api/project-catalog", invalid, w.csrf, ""); status != 400 {
+			t.Fatal("invalid catalog account accepted", status)
+		}
+	}
+	if count(w.api, "level_task_management") != 0 {
+		t.Fatal("invalid catalog requests reached the task API")
+	}
+	before, err := os.ReadFile(w.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, r := w.request(t, "/api/project-catalog", input, w.csrf, "")
+	call := last(w.api, "level_task_management")
+	if status != 200 || !includes(stringsList(r["names"]), "电脑QQ在线") || count(w.api, "level_task_management") != 1 ||
+		len(call) != 3 || Int(call["self_id"]) != robot || Int(call["protocol_id"]) != 1 || Str(call["operation"]) != "status" {
+		t.Fatalf("unexpected catalog response %d or API call %v", status, call)
+	}
+	after, err := os.ReadFile(w.path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("project catalog modified the config")
+	}
+}
+
+func TestWebSavesTemplatesAndRetainsThemForOlderClients(t *testing.T) {
+	w := webTest(t)
+	w.setup(t)
+	legacy := w.e.CurrentConfig()
+	config := legacy
+	config.TaskAliases = map[string]string{"去日签卡打一次卡": "日签打卡"}
+	config.ReplyTemplates = make(map[string]string)
+	// A fully edited catalog can exceed the default JSON body limit.
+	for _, entry := range replyCatalog {
+		config.ReplyTemplates[entry.ID] = entry.Default + "\n" + strings.Repeat("示例", 80)
+	}
+	if status, _ := w.request(t, "/api/config", config, w.csrf, ""); status != 200 {
+		t.Fatal("the full catalog could not be saved", status)
+	}
+	legacy.QuickLogin = false
+	if status, _ := w.request(t, "/api/config", legacy, w.csrf, ""); status != 200 {
+		t.Fatal("older client could not save config", status)
+	}
+	current := w.e.CurrentConfig()
+	if current.QuickLogin || current.TaskAliases["去日签卡打一次卡"] != "日签打卡" ||
+		current.ReplyTemplates["menu"] != config.ReplyTemplates["menu"] {
+		t.Fatal("saving an older config lost the installed templates")
+	}
+	w.e.Handle(event(user, 1, "等级菜单"))
+	if got := message(w.api); !strings.Contains(got, "开始登录") || !strings.Contains(got, "示例示例") {
+		t.Fatalf("saved template not used in running engine: %q", got)
+	}
+	config.ReplyTemplates = map[string]string{"menu": "没有指令的菜单"}
+	if status, _ := w.request(t, "/api/config", config, w.csrf, ""); status != 400 {
+		t.Fatal("invalid menu was saved", status)
+	}
+	current = w.e.CurrentConfig()
+	if current.ReplyTemplates["menu"] == config.ReplyTemplates["menu"] {
+		t.Fatal("invalid template replaced the saved menu")
+	}
+	clear := Object{"bot_qq": robot, "session_minutes": 15, "task_aliases": Object{}, "reply_templates": Object{}}
+	if status, _ := w.request(t, "/api/config", clear, w.csrf, ""); status != 200 {
+		t.Fatal("could not clear overrides", status)
+	}
+	raw, err := os.ReadFile(w.path)
+	var persisted Config
+	if err != nil || json.Unmarshal(raw, &persisted) != nil || len(persisted.ReplyTemplates) != 0 || len(persisted.TaskAliases) != 0 {
+		t.Fatal("default templates were not restored in persistent config")
+	}
+}

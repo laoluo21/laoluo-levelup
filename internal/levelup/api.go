@@ -42,33 +42,41 @@ type RemoteError struct {
 func (e *RemoteError) Error() string { return e.Code }
 func uncertain(err error) bool       { var e *RemoteError; return errors.As(err, &e) && e.Uncertain }
 func Friendly(err error) string {
+	id, values := errorReply(err)
+	return renderReply(nil, id, values...)
+}
+
+func errorReply(err error) (string, []string) {
 	var e *RemoteError
 	if errors.As(err, &e) {
 		switch e.Code {
 		case "DEVICE_CREATE_RESULT_UNKNOWN":
-			return "指纹创建结果尚未确认，已暂停自动建号，重启也不会重复创建。请联系管理员在框架后台核对设备与账号后再继续。"
+			return "error_device_pending", nil
 		case "TIER_CAPABILITY_FORBIDDEN":
-			return "当前框架权益不支持此操作。请在Mengka后台核对权益，若是登录验证也可在账号页完成。"
+			return "error_tier", nil
 		case "QQ_LEVEL_TOO_LOW":
 			if e.RequiredLevel > 0 && e.CurrentLevel >= 0 {
-				return fmt.Sprintf("当前QQ等级为%d级，框架要求此操作至少%d级。若是登录验证，可到Mengka账号页完成。", e.CurrentLevel, e.RequiredLevel)
+				return "error_level", []string{
+					"当前等级", strconv.FormatInt(e.CurrentLevel, 10),
+					"所需等级", strconv.FormatInt(e.RequiredLevel, 10),
+				}
 			}
-			return "当前QQ未达到框架对该操作的等级要求。若是登录验证，可到Mengka账号页完成。"
+			return "error_level_generic", nil
 		case "QQ_LEVEL_UNKNOWN":
-			return "框架暂时无法核验当前QQ的最新等级，请确认账号在线后重试。若是登录验证，可到Mengka账号页完成。"
+			return "error_level_unknown", nil
 		case "ACCOUNT_OFFLINE":
-			return "当前QQ账号未在线，请在Mengka账号页核对登录状态。"
+			return "error_offline", nil
 		case "AUTHORIZATION_UNAVAILABLE":
-			return "框架暂时无法核验授权，请在Mengka后台检查授权状态和网络。"
+			return "error_auth", nil
 		}
 		if e.Status == "restricted" || e.Code == "restricted" {
-			return "框架限制了当前操作，请在Mengka后台核对权益和账号状态。若是登录验证，可在账号页完成。"
+			return "error_restricted", nil
+		}
+		if e.Uncertain {
+			return "error_uncertain", nil
 		}
 	}
-	if uncertain(err) {
-		return "本次结果尚未确认，请先发送“继续验证”核对；不会自动重复提交。"
-	}
-	return "操作未完成，请稍后核对。若持续失败，请联系插件管理员查看框架账号日志。"
+	return "error_generic", nil
 }
 func Obj(v any) Object { m, _ := v.(map[string]any); return m }
 func Arr(v any) []any  { a, _ := v.([]any); return a }

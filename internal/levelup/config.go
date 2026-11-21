@@ -25,7 +25,10 @@ func ValidateConfig(c Config, allowUnset bool) error {
 			return errors.New("后台入口须为不含密码、访问码或查询参数的HTTPS地址")
 		}
 	}
-	return nil
+	if err := validateTaskAliases(c.TaskAliases); err != nil {
+		return err
+	}
+	return validateReplyTemplates(c.ReplyTemplates)
 }
 func findConfiguredBot(d Directory, qq int64, kind string, pid *int64) (*Bot, error) {
 	if pid == nil {
@@ -56,6 +59,12 @@ func (e *Engine) SaveConfig(path string, c Config) error {
 	old := e.Config
 	c.DataDir = old.DataDir
 	c.WebListen = old.WebListen
+	if c.TaskAliases == nil {
+		c.TaskAliases = old.TaskAliases
+	}
+	if c.ReplyTemplates == nil {
+		c.ReplyTemplates = old.ReplyTemplates
+	}
 	changed := old.BotQQ != c.BotQQ || !reflect.DeepEqual(old.BotProtocolID, c.BotProtocolID) || !reflect.DeepEqual(old.PadProtocolID, c.PadProtocolID) || !reflect.DeepEqual(old.LinuxProtocolID, c.LinuxProtocolID)
 	if changed {
 		e.Sweep()
