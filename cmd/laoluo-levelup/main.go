@@ -106,6 +106,15 @@ func main() {
 		_ = web.Shutdown(ctx)
 	}()
 	log.Printf("网页配置入口：http://%s/ （外部访问请配置反向代理或端口转发）", listener.Addr().String())
+	if managed.DataDirectory != "" {
+		socketWeb, socketPath, socketErr := levelup.StartAdminUnixServer(admin)
+		if socketErr != nil {
+			log.Printf("管理网页 Socket 未启用：%v", socketErr)
+		} else {
+			defer socketWeb.Close()
+			log.Printf("同域管理入口 Socket：%s，接入方式见包内《管理页面访问说明.md》", socketPath)
+		}
+	}
 	if admin.InitialCode != "" {
 		log.Printf("首次网页初始化码（仅用一次，不是QQ密码）：%s", admin.InitialCode)
 		log.Printf("也保存在插件自己的 %s", filepath.Join(dataDir, "web-first-access.txt"))
@@ -121,16 +130,6 @@ func main() {
 		log.Print("未收到框架ready，已停止。")
 		return
 	case <-readDone:
-		return
-	}
-	result, err := levelup.Call(ipc, "get_plugin_context", levelup.Object{})
-	if err != nil {
-		log.Print("无法读取公开插件上下文，已停止。")
-		return
-	}
-	ctx := levelup.Obj(result)
-	if err = levelup.ValidatePluginContext(ctx); err != nil {
-		log.Print(err)
 		return
 	}
 	admin.SetReady(true, "框架已连接")

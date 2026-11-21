@@ -16,9 +16,9 @@ import (
 
 type Object = map[string]any
 
-const Version = "0.3.2"
+const Version = "0.3.5"
 
-var Actions = []string{"get_plugin_context", "get_account_management_context", "get_device_profile_list", "create_device_profile", "send_friend_msg", "upload_friend_image", "file_transfer", "add_account", "update_account", "offline_account", "login_account", "query_login_qr", "scan_qr", "auth_qr", "get_security_verify_methods", "get_security_verify_qr", "query_security_verify_qr", "get_sms", "check_sms", "submit_identity_phone", "confirm_identity_sms", "level_task_management", "execute_level_tasks"}
+var Actions = []string{"get_account_management_context", "get_device_profile_list", "create_device_profile", "send_friend_msg", "upload_friend_image", "file_transfer", "add_account", "update_account", "offline_account", "login_account", "query_login_qr", "scan_qr", "auth_qr", "get_security_verify_methods", "get_security_verify_qr", "query_security_verify_qr", "get_sms", "check_sms", "submit_identity_phone", "confirm_identity_sms", "level_task_management", "execute_level_tasks"}
 var allowed = func() map[string]bool {
 	m := map[string]bool{}
 	for _, s := range Actions {
@@ -32,9 +32,11 @@ type API interface {
 	Submit(context.Context, string, Object) error
 }
 type RemoteError struct {
-	Code      string
-	Status    string
-	Uncertain bool
+	Code          string
+	Status        string
+	RequiredLevel int64
+	CurrentLevel  int64
+	Uncertain     bool
 }
 
 func (e *RemoteError) Error() string { return e.Code }
@@ -42,14 +44,25 @@ func uncertain(err error) bool       { var e *RemoteError; return errors.As(err,
 func Friendly(err error) string {
 	var e *RemoteError
 	if errors.As(err, &e) {
-		if e.Status == "restricted" {
-			return "框架拒绝了当前操作：请核对授权、账号在线状态及最新QQ等级。3.0.7的等级任务与扫码接口要求Plus最新等级至少32级或Pro；扫码受限时可到框架后台完成登录。"
-		}
 		switch e.Code {
 		case "DEVICE_CREATE_RESULT_UNKNOWN":
 			return "指纹创建结果尚未确认，已暂停自动建号，重启也不会重复创建。请联系管理员在框架后台核对设备与账号后再继续。"
-		case "QQ_LEVEL_TOO_LOW", "QQ_LEVEL_UNKNOWN", "ACCOUNT_OFFLINE", "AUTHORIZATION_UNAVAILABLE", "restricted":
-			return "当前账号等级、在线状态或框架授权不满足要求。3.0.7等级任务与扫码接口要求Plus最新等级至少32级或Pro；扫码受限时请到框架后台完成登录。"
+		case "TIER_CAPABILITY_FORBIDDEN":
+			return "当前框架权益不支持此操作。请在Mengka后台核对权益，若是登录验证也可在账号页完成。"
+		case "QQ_LEVEL_TOO_LOW":
+			if e.RequiredLevel > 0 && e.CurrentLevel >= 0 {
+				return fmt.Sprintf("当前QQ等级为%d级，框架要求此操作至少%d级。若是登录验证，可到Mengka账号页完成。", e.CurrentLevel, e.RequiredLevel)
+			}
+			return "当前QQ未达到框架对该操作的等级要求。若是登录验证，可到Mengka账号页完成。"
+		case "QQ_LEVEL_UNKNOWN":
+			return "框架暂时无法核验当前QQ的最新等级，请确认账号在线后重试。若是登录验证，可到Mengka账号页完成。"
+		case "ACCOUNT_OFFLINE":
+			return "当前QQ账号未在线，请在Mengka账号页核对登录状态。"
+		case "AUTHORIZATION_UNAVAILABLE":
+			return "框架暂时无法核验授权，请在Mengka后台检查授权状态和网络。"
+		}
+		if e.Status == "restricted" || e.Code == "restricted" {
+			return "框架限制了当前操作，请在Mengka后台核对权益和账号状态。若是登录验证，可在账号页完成。"
 		}
 	}
 	if uncertain(err) {
@@ -63,8 +76,9 @@ func Str(v any) string { s, _ := v.(string); return s }
 func Int(v any) int64 {
 	switch n := v.(type) {
 	case json.Number:
-		i, _ := n.Int64()
-		return i
+		if i, err := n.Int64(); err == nil {
+			return i
+		}
 	case int64:
 		return n
 	case int:
@@ -158,7 +172,12 @@ func (p *IPC) Read(r io.Reader) error {
 				if code == "" {
 					code = "REMOTE_REJECTED"
 				}
-				r.err = &RemoteError{Code: code, Status: Str(m["status"])}
+				r.err = &RemoteError{
+					Code:          code,
+					Status:        Str(m["status"]),
+					RequiredLevel: Int(m["requiredLevel"]),
+					CurrentLevel:  Int(m["currentLevel"]),
+				}
 			}
 			ch <- r
 		}
@@ -209,20 +228,3 @@ func Call(api API, action string, params Object) (any, error) {
 }
 func number(s string) int64    { v, _ := strconv.ParseInt(s, 10, 64); return v }
 func key(qq, pid int64) string { return fmt.Sprintf("%d:%d", qq, pid) }
-
-// ValidatePluginContext uses management capabilities, not the IPC protocol version.
-func ValidatePluginContext(ctx Object) error {
-	if Int(ctx["management_api_version"]) != 2 || Str(ctx["scope"]) != "framework" || Str(ctx["account_selector"]) != "self_id+protocol_id" {
-		return errors.New("当前框架插件API不兼容，需要Mengka NT 3.0.7及framework范围")
-	}
-	available := map[string]bool{}
-	for _, a := range Arr(ctx["available_actions"]) {
-		available[Str(a)] = true
-	}
-	for _, a := range Actions {
-		if !available[a] {
-			return fmt.Errorf("框架未开放公开接口%s，请检查版本及插件权限", a)
-		}
-	}
-	return nil
-}

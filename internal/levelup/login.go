@@ -338,8 +338,9 @@ func (e *Engine) startLinux(qq int64) error {
 			scan, scanErr := Call(e.API, "scan_qr", p)
 			s := Obj(scan)
 			accepted := Int(s["code"]) == 0 || Int(s["code"]) == 1 && Int(s["status"]) == 1
-			if scanErr == nil && accepted {
-				p["skip_phone_confirm"] = true
+			needA1, hasNeedA1 := s["need_a1"].(bool)
+			if scanErr == nil && accepted && hasNeedA1 {
+				p["need_a1"] = needA1
 				auth, authErr := Call(e.API, "auth_qr", p)
 				a := Obj(auth)
 				if authErr == nil && Int(a["code"]) == 0 && Bool(a["success"]) {

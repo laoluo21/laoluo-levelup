@@ -677,11 +677,11 @@ func (e *Engine) toggle(qq int64, title string, on bool) error {
 	}
 	return e.send(qq, title+" 已"+state)
 }
-func collectTasks(v any, out map[string]Object) {
+func collectTasks(v any, out map[string][]Object) {
 	switch value := v.(type) {
 	case map[string]any:
 		if title := Str(value["title"]); title != "" {
-			out[title] = value
+			out[title] = append(out[title], value)
 		}
 		for _, v := range value {
 			collectTasks(v, out)
@@ -692,8 +692,33 @@ func collectTasks(v any, out map[string]Object) {
 		}
 	}
 }
-func done(t Object) bool {
-	return Bool(t["is_done"]) || Int(t["status"]) == 1 || Str(t["status"]) == "completed"
+func canRepairTask(rows []Object, today string) bool {
+	incomplete := false
+	for _, row := range rows {
+		done, hasDone := row["is_done"].(bool)
+		status := row["status"]
+		switch Str(status) {
+		case "1", "completed", "confirmed":
+			return false
+		}
+		if done || Int(status) == 1 || Bool(row["is_paid_task"]) {
+			return false
+		}
+		// A sign-in can be complete on a day with no acceleration reward.
+		if Bool(row["action_done"]) {
+			date := Str(row["action_done_date"])
+			if date == today || date == "" {
+				return false
+			}
+		}
+		for _, key := range []string{"available", "can_execute", "executable"} {
+			if allowed, ok := row[key].(bool); ok && !allowed {
+				return false
+			}
+		}
+		incomplete = incomplete || hasDone || Int(status) == 0 || Str(status) == "0"
+	}
+	return incomplete
 }
 func (e *Engine) repair(qq int64) error {
 	b, err := e.requirePad(qq)
@@ -721,9 +746,12 @@ func (e *Engine) repair(qq int64) error {
 	if Int(Obj(panel["payload"])["uin"]) != qq && Str(Obj(panel["payload"])["uin"]) != strconv.FormatInt(qq, 10) {
 		return errors.New("PANEL_IDENTITY_MISMATCH")
 	}
-	tasks := map[string]Object{}
+	tasks := map[string][]Object{}
 	collectTasks(panel["payload"], tasks)
-	collectTasks(Obj(panel["state"])["membership_tasks"], tasks)
+	state := Obj(panel["state"])
+	collectTasks(state["membership_tasks"], tasks)
+	supported := stringsList(state["supported_tasks"])
+	today := time.Now().In(time.FixedZone("Asia/Shanghai", 8*60*60)).Format(time.DateOnly)
 	batch := []string{}
 	pc := false
 	for _, s := range selected {
@@ -731,17 +759,7 @@ func (e *Engine) repair(qq int64) error {
 			pc = true
 			continue
 		}
-		t := tasks[s]
-		if t == nil || done(t) || Bool(t["is_paid_task"]) {
-			continue
-		}
-		if a, ok := t["available"].(bool); ok && !a {
-			continue
-		}
-		if a, ok := t["can_execute"].(bool); ok && !a {
-			continue
-		}
-		if !includes(stringsList(Obj(panel["state"])["supported_tasks"]), s) {
+		if !includes(supported, s) || !canRepairTask(tasks[s], today) {
 			continue
 		}
 		batch = append(batch, s)

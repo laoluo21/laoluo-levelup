@@ -8,6 +8,8 @@
 
 [下载插件安装包](https://github.com/laoluo21/laoluo-levelup/releases) · [友情链接：Mengka NT 官方仓库](https://github.com/Carlor-Official/Mengka-NT)
 
+**v0.3.5 新增同域管理入口。** 托管 Docker 安装可通过 Unix Socket 接入宿主机 Nginx。配置一次后，用现有 Mengka 域名打开 `/laoluo-levelup/`，无需新域名或映射 `18890`。 [接入步骤](管理页面访问说明.md#1-用现有-mengka-域名打开管理页) · [更新记录](CHANGELOG.md)
+
 ## 功能
 
 - **私聊自助**：好友只能操作自己的 QQ。支持 Pad 登录、按登录结果继续验证，以及 Linux 电脑登录。
@@ -20,16 +22,16 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| Mengka | 插件清单最低版本为 **Mengka NT 3.0.7** |
+| Mengka | 以 **Mengka NT 3.2.3** 为适配目标。插件清单最低版本为 3.0.7 |
 | 环境 | Linux amd64 或 arm64，官方 IPC 插件导入所需的 Docker 环境已就绪 |
 | 机器人 | 使用已经在线的 **NT Pad** 账号，并与使用者互为好友 |
-| 框架权益 | 3.0.7 的等级任务与插件扫码接口由框架授权。Free 不可调用，Plus 由框架核对对应账号实例最新等级至少 32 级，Pro 无此等级门槛 |
+| 框架权益 | 3.2.3 的本人扫码登录与安全验证二维码支持 Plus / Pro，两档均无 QQ 等级前置条件。等级任务及使用在线 Pad 扫码授权仍要求 Plus 对应账号最新等级达到 32 级，Pro 无此等级门槛。Free 无上述接口的调用权限。具体权益由框架核验 |
 
 ## 安装与配置
 
 1. 在 [GitHub Releases](https://github.com/laoluo21/laoluo-levelup/releases) 选择与你服务器架构一致的安装包。x86-64 用 `*-linux-amd64.zip`，ARM64 用 `*-linux-arm64.zip`。同一版本提供 `SHA256SUMS`。
 2. 在 Mengka 插件管理中导入 ZIP 并启动。打开插件运行日志，查看管理网页的监听地址和一次性初始化码。
-3. 按[管理页面访问说明](管理页面访问说明.md)访问控制台并设置密码。默认端口为 `18890`，监听地址指向插件运行环境的回环地址。对外开放请使用 HTTPS。
+3. 用现有 Mengka HTTPS 域名的 `/laoluo-levelup/` 路径打开控制台。托管 Docker 安装可以通过插件 Socket 接入宿主机 Nginx，无需映射 `18890`。[管理页面访问说明](管理页面访问说明.md)包含安装包内的接入工具和配置步骤。
 4. 在「机器人配置」里选择已在线的 NT Pad 机器人，确认 Pad 和 Linux 协议，然后保存。用户可以添加机器人为好友，在 QQ 私聊发送 `等级菜单`。
 
 升级时保留框架分配的插件持久目录，其中包含配置、网页认证状态和设备归属。建议升级前先备份。
@@ -60,11 +62,11 @@ python3 scripts/package.py
 
 安装包及校验文件输出到 `dist/`。从源码运行测试时，如果本机配置了交叉编译目标，请将 `GOOS` 和 `GOARCH` 临时设为本机平台。
 
-目前已完成自动测试和模拟 IPC 验证，真实好友登录、验证与补挂仍待完整联调。欢迎通过 [Issues](https://github.com/laoluo21/laoluo-levelup/issues) 提交反馈，附上插件版本、Mengka 版本、复现步骤和脱敏日志。
+在 Mengka 托管 Docker 部署中已验证 v0.3.5 的同域 HTTPS 管理页。首次设置密码、登录和保存配置已通过独立 Docker + Nginx 测试。3.2.3 的真实好友登录、验证与补挂仍待完整联调。反馈请附插件版本、Mengka 版本、复现步骤和脱敏日志。 [提交 Issue](https://github.com/laoluo21/laoluo-levelup/issues)
 
 ## 发布新版本
 
-更新 `internal/levelup/api.go` 中的 `Version`，运行 `python3 scripts/package.py` 更新插件清单，并将版本改动提交到 `main`。为该提交创建匹配的 `v<版本号>` 标签并推送，例如 `v0.3.3`。GitHub Actions 会运行测试并构建 Linux amd64、arm64 安装包及校验文件，全部通过后发布到 Releases。带 `-beta`、`-rc.1` 等后缀的版本会标记为预发行版。
+更新 `internal/levelup/api.go` 中的 `Version`，运行 `python3 scripts/package.py` 更新插件清单，并将版本改动提交到 `main`。为该提交创建匹配的 `v<版本号>` 标签并推送，例如 `v0.3.4`。GitHub Actions 会运行测试并构建 Linux amd64、arm64 安装包及校验文件，全部通过后发布到 Releases。带 `-beta`、`-rc.1` 等后缀的版本会标记为预发行版。
 
 ## 许可
 

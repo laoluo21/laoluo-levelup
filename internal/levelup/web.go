@@ -1,6 +1,7 @@
 package levelup
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -157,7 +158,7 @@ func (a *AdminWeb) secure(r *http.Request) bool {
 	}
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback() && r.Header.Get("X-Forwarded-Proto") == "https"
+	return (adminSocketRequest(r) || ip != nil && ip.IsLoopback()) && r.Header.Get("X-Forwarded-Proto") == "https"
 }
 func (a *AdminWeb) newSession(w http.ResponseWriter, r *http.Request) webSession {
 	token := randomString()
@@ -178,6 +179,11 @@ func (a *AdminWeb) newSession(w http.ResponseWriter, r *http.Request) webSession
 }
 func (a *AdminWeb) rateAllowed(r *http.Request) bool {
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if adminSocketRequest(r) {
+		if ip := net.ParseIP(r.Header.Get("X-Real-IP")); ip != nil {
+			host = ip.String()
+		}
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := time.Now()
@@ -465,7 +471,65 @@ func StartAdminServer(a *AdminWeb, address string) (*http.Server, net.Listener, 
 	if err != nil {
 		return nil, nil, fmt.Errorf("网页端口监听失败：%w", err)
 	}
-	server := &http.Server{Handler: a, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 55 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
+	return serveAdmin(a, listener), listener, nil
+}
+
+const AdminSocketDirectory = "admin-web"
+const AdminSocketFilename = "admin.sock"
+
+// StartAdminUnixServer runs under the same instance lock as the TCP listener.
+func StartAdminUnixServer(a *AdminWeb) (*http.Server, string, error) {
+	dir := filepath.Join(a.DataDir, AdminSocketDirectory)
+	if err := os.Mkdir(dir, 0700); err != nil && !os.IsExist(err) {
+		return nil, "", err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	if !info.IsDir() {
+		return nil, "", errors.New("管理入口目录必须是独立目录")
+	}
+	socketPath := filepath.Join(dir, AdminSocketFilename)
+	if info, err := os.Lstat(socketPath); err == nil {
+		if info.Mode()&os.ModeSocket == 0 {
+			return nil, "", errors.New("管理入口路径已被非 Socket 文件占用")
+		}
+		if err := os.Remove(socketPath); err != nil {
+			return nil, "", err
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, "", err
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, "", err
+	}
+	// The administrator can assign a dedicated group on the parent directory.
+	if err := os.Chmod(socketPath, 0660); err != nil {
+		_ = listener.Close()
+		return nil, "", err
+	}
+	return serveAdmin(a, listener), socketPath, nil
+}
+
+type adminSocketContextKey struct{}
+
+func adminSocketRequest(r *http.Request) bool {
+	isSocket, _ := r.Context().Value(adminSocketContextKey{}).(bool)
+	return isSocket
+}
+
+func serveAdmin(a *AdminWeb, listener net.Listener) *http.Server {
+	server := &http.Server{
+		Handler: a, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
+		WriteTimeout: 55 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384,
+	}
+	if listener.Addr().Network() == "unix" {
+		server.ConnContext = func(ctx context.Context, _ net.Conn) context.Context {
+			return context.WithValue(ctx, adminSocketContextKey{}, true)
+		}
+	}
 	go func() { _ = server.Serve(listener) }()
-	return server, listener, nil
+	return server
 }

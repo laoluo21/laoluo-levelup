@@ -59,7 +59,7 @@ func TestIPCHandshakeCorrelatesOutOfOrderAndKeepsErrorsPrivate(t *testing.T) {
 		t.Fatal("ready not received")
 	}
 	ch := make(chan string, 2)
-	for _, a := range []string{"get_plugin_context", "get_device_profile_list"} {
+	for _, a := range []string{"get_account_management_context", "get_device_profile_list"} {
 		go func(a string) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
@@ -72,7 +72,7 @@ func TestIPCHandshakeCorrelatesOutOfOrderAndKeepsErrorsPrivate(t *testing.T) {
 		}(a)
 	}
 	got := map[string]bool{<-ch: true, <-ch: true}
-	if !got["get_plugin_context"] || !got["get_device_profile_list"] {
+	if !got["get_account_management_context"] || !got["get_device_profile_list"] {
 		t.Fatal("responses mismatched")
 	}
 	if err := <-frameworkDone; err != nil {
@@ -113,41 +113,21 @@ func TestIPCExactIntegerSelectorsAndUnknownEvents(t *testing.T) {
 	}
 }
 
-func TestFrameworkCapabilitiesRequireDeviceCreation(t *testing.T) {
-	actions := []any{}
-	for _, a := range Actions {
-		actions = append(actions, a)
-	}
-	ctx := Object{"management_api_version": int64(2), "scope": "framework", "account_selector": "self_id+protocol_id", "available_actions": actions}
-	if err := ValidatePluginContext(ctx); err != nil {
-		t.Fatal(err)
-	}
-	ctx["scope"] = "node"
-	if ValidatePluginContext(ctx) == nil {
-		t.Fatal("legacy scope accepted")
-	}
-	ctx["scope"] = "framework"
-	filtered := []any{}
-	for _, a := range actions {
-		if a != "create_device_profile" {
-			filtered = append(filtered, a)
-		}
-	}
-	ctx["available_actions"] = filtered
-	if ValidatePluginContext(ctx) == nil {
-		t.Fatal("missing create permission accepted")
-	}
-}
 func TestIPCRestrictionStatusPreservedAndPrivate(t *testing.T) {
 	var out strings.Builder
 	ipc := NewIPC(&out)
 	ipc.pending["fixture"] = make(chan response, 1)
 	ch := ipc.pending["fixture"]
-	if err := ipc.Read(strings.NewReader(`{"type":"action_result","id":"fixture","ok":false,"code":"NEW_RESTRICTION","status":"restricted","error":"private-password"}` + "\n")); err != nil {
+	if err := ipc.Read(strings.NewReader(`{"type":"action_result","id":"fixture","ok":false,"code":"QQ_LEVEL_TOO_LOW","status":"restricted","requiredLevel":32,"currentLevel":20,"error":"private-password"}` + "\n")); err != nil {
 		t.Fatal(err)
 	}
 	r := <-ch
-	if r.err == nil || !strings.Contains(Friendly(r.err), "32") || strings.Contains(Friendly(r.err), "private-password") {
+	var remote *RemoteError
+	if !errors.As(r.err, &remote) || remote.Status != "restricted" || !strings.Contains(Friendly(r.err), "32") || !strings.Contains(Friendly(r.err), "20") || strings.Contains(Friendly(r.err), "private-password") {
 		t.Fatal("restriction not safely explained")
+	}
+	tier := Friendly(&RemoteError{Code: "TIER_CAPABILITY_FORBIDDEN", Status: "restricted"})
+	if !strings.Contains(tier, "权益") || strings.Contains(tier, "32") {
+		t.Fatal("tier restrictions should not claim a level requirement")
 	}
 }

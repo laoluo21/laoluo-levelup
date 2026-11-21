@@ -29,6 +29,7 @@ type fakeAPI struct {
 	settings               Object
 	supported              []any
 	taskRows               []any
+	membershipRows         []any
 	addUnknown             bool
 	createErr              error
 	createMalformed        bool
@@ -37,6 +38,7 @@ type fakeAPI struct {
 	addErr                 error
 	loginErr               error
 	queryErr               error
+	scanReply              Object
 	restrict               bool
 	qr                     bool
 }
@@ -146,7 +148,12 @@ func (f *fakeAPI) Call(ctx context.Context, action string, p Object) (any, error
 	case "query_security_verify_qr":
 		return Object{"next": "security", "status": "waiting"}, nil
 	case "scan_qr":
+		if f.scanReply != nil {
+			return f.scanReply, nil
+		}
 		return nil, &RemoteError{Code: "UPSTREAM_REJECTED"}
+	case "auth_qr":
+		return Object{"code": int64(0), "success": true}, nil
 	case "query_login_qr":
 		if f.queryErr != nil {
 			return nil, f.queryErr
@@ -162,7 +169,7 @@ func (f *fakeAPI) Call(ctx context.Context, action string, p Object) (any, error
 			f.settings["schedule_enabled"] = p["schedule_enabled"]
 			return Object{"settings": f.settings}, nil
 		case "panel":
-			return Object{"payload": Object{"uin": Int(p["self_id"]), "tasks": f.taskRows}, "state": Object{"supported_tasks": f.supported, "settings": f.settings}}, nil
+			return Object{"payload": Object{"uin": Int(p["self_id"]), "tasks": f.taskRows}, "state": Object{"supported_tasks": f.supported, "settings": f.settings, "membership_tasks": f.membershipRows}}, nil
 		default:
 			return Object{"settings": f.settings, "supported_tasks": f.supported}, nil
 		}
@@ -723,5 +730,68 @@ func TestLevelMenuReplacesOldTrigger(t *testing.T) {
 	e.Handle(event(user, 801, "等级菜单"))
 	if count(api, "send_friend_msg") != 1 || !strings.HasPrefix(message(api), "等级菜单\n") {
 		t.Fatal("new trigger failed")
+	}
+}
+
+func TestLinuxQuickLoginHonorsScanNeedA1(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		needA1   any
+		wantAuth bool
+	}{
+		{"false", false, true},
+		{"true", true, true},
+		{"missing", nil, false},
+		{"invalid", "false", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, api, _ := fixture(t)
+			api.accounts = append(api.accounts, account(user, 1, 2, 1, "pad"))
+			api.scanReply = Object{"code": int64(0)}
+			if tc.needA1 != nil {
+				api.scanReply["need_a1"] = tc.needA1
+			}
+			if err := e.startLinux(user); err != nil {
+				t.Fatal(err)
+			}
+			if p := last(api, "auth_qr"); tc.wantAuth {
+				if p["need_a1"] != tc.needA1 || Int(p["self_id"]) != user || Int(p["protocol_id"]) != 1 || Str(p["k"]) != "fixture" {
+					t.Fatalf("incorrect QR authorization params: %v", p)
+				}
+				if _, ok := p["skip_phone_confirm"]; ok {
+					t.Fatal("framework must decide whether phone confirmation is needed")
+				}
+			} else if p != nil {
+				t.Fatal("authorized without a valid scan flag")
+			}
+			if count(api, "upload_friend_image") != 1 || count(api, "login_account") != 1 {
+				t.Fatal("should fall back to the current login QR without opening another session")
+			}
+		})
+	}
+}
+
+func TestRepairChecksMembershipSignInAndCurrentTaskCatalog(t *testing.T) {
+	e, api, _ := fixture(t)
+	api.accounts = append(api.accounts, account(user, 1, 2, 1, "pad"))
+	const signIn = "会员官网连续签到奖励"
+	const yuanbao = "去元宝体验技能"
+	const removed = "去京东浏览15秒商品"
+	api.settings["selected_tasks"] = []any{signIn, yuanbao, removed, "状态缺失", "不可补挂"}
+	api.supported = []any{signIn, yuanbao, "状态缺失", "不可补挂"}
+	api.taskRows = []any{
+		Object{"title": signIn, "status": int64(0)},
+		Object{"title": yuanbao, "status": "0"},
+		Object{"title": removed, "status": int64(0)},
+		Object{"title": "状态缺失"},
+		Object{"title": "不可补挂", "is_done": false, "executable": false},
+	}
+	today := time.Now().In(time.FixedZone("Asia/Shanghai", 8*60*60)).Format(time.DateOnly)
+	api.membershipRows = []any{Object{"title": signIn, "action_done": true, "action_done_date": today, "reward_status": "not_due", "is_done": false}}
+	if err := e.repair(user); err != nil {
+		t.Fatal(err)
+	}
+	if batch := stringsList(last(api, "execute_level_tasks")["tasks"]); len(batch) != 1 || batch[0] != yuanbao {
+		t.Fatalf("unexpected batch: %v", batch)
 	}
 }
