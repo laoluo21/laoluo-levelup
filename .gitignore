@@ -1,0 +1,14 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.env
+.env.*
+.build/
+dist/
+data/
+*.log
+*.key
+*.enc
+web-auth.json
+web-first-access.txt
+config.local.json

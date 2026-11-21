@@ -1,0 +1,11 @@
+{
+  "bot_qq": 0,
+  "bot_protocol_id": null,
+  "pad_protocol_id": null,
+  "linux_protocol_id": null,
+  "admin_url": "",
+  "data_dir": "data",
+  "session_minutes": 15,
+  "quick_login": true,
+  "web_listen": "127.0.0.1:18890"
+}
